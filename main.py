@@ -35,6 +35,7 @@ headers = {
 signaux_activés = True  # Initialement les signaux sont activés
 last_signal_time = {}  # Dictionnaire pour stocker le dernier envoi de signal par utilisateur
 signaux_restants = {}  # Dictionnaire pour stocker le nombre de signaux restants par utilisateur
+users_activated = {}  # Dictionnaire pour suivre les utilisateurs activés
 
 # === Ton ID pour vérification ===
 MON_ID = 6908816326  # Ton ID utilisateur spécifique pour les signaux
@@ -57,17 +58,21 @@ def send_welcome(message):
 def handle_menu(message):
     if message.text == "🎯 Signal":
         if signaux_activés:
-            # Vérifier l'anti-spam (2 minutes)
+            # Vérifier si l'utilisateur est activé
             user_id = message.from_user.id
-            if user_id in last_signal_time:
-                time_since_last_signal = datetime.now() - last_signal_time[user_id]
-                if time_since_last_signal < timedelta(minutes=2):
-                    bot.reply_to(message, "Veuillez patienter encore quelques minutes avant de demander un nouveau signal.")
-                    return
+            if user_id in users_activated and users_activated[user_id]:
+                # Vérifier l'anti-spam (2 minutes)
+                if user_id in last_signal_time:
+                    time_since_last_signal = datetime.now() - last_signal_time[user_id]
+                    if time_since_last_signal < timedelta(minutes=2):
+                        bot.reply_to(message, "Veuillez patienter encore quelques minutes avant de demander un nouveau signal.")
+                        return
 
-            send_prediction(message)
-            # Mettre à jour le dernier envoi de signal
-            last_signal_time[user_id] = datetime.now()
+                send_prediction(message)
+                # Mettre à jour le dernier envoi de signal
+                last_signal_time[user_id] = datetime.now()
+            else:
+                bot.reply_to(message, "Vous n'avez pas accès aux signaux.")
         else:
             bot.reply_to(message, "Les signaux sont actuellement désactivés.")
     elif message.text == "👤 Mon compte":
@@ -97,8 +102,9 @@ def handle_admin_actions(message):
     global signaux_activés
 
     if message.text == "Activer les signaux":
-        signaux_activés = True
-        bot.reply_to(message, "Les signaux sont maintenant activés.")
+        # Demander l'ID utilisateur et le nombre de signaux
+        bot.send_message(message.chat.id, "Veuillez entrer l'ID de l'utilisateur.")
+        bot.register_next_step_handler(message, get_user_id_for_signals)
     
     elif message.text == "Désactiver les signaux":
         signaux_activés = False
@@ -111,10 +117,30 @@ def handle_admin_actions(message):
     elif message.text == "Retour":
         send_welcome(message)
 
+# === Fonction pour obtenir l'ID utilisateur et le nombre de signaux ===
+def get_user_id_for_signals(message):
+    user_id = int(message.text)  # Convertir l'ID utilisateur
+    bot.send_message(message.chat.id, f"ID utilisateur {user_id} trouvé. Combien de signaux souhaitez-vous lui attribuer ?")
+    bot.register_next_step_handler(message, get_signals_for_user, user_id)
+
+# === Fonction pour obtenir le nombre de signaux ===
+def get_signals_for_user(message, user_id):
+    try:
+        num_signals = int(message.text)  # Convertir le nombre de signaux
+        # Activer l'utilisateur pour qu'il puisse demander des signaux
+        users_activated[user_id] = True
+        signaux_restants[user_id] = num_signals
+        bot.reply_to(message, f"Les signaux ont été activés pour l'utilisateur {user_id} avec {num_signals} signaux.")
+
+        # Notifier l'utilisateur que les signaux sont activés
+        bot.send_message(user_id, "Les signaux ont été activés pour vous. Vous pouvez maintenant demander des prédictions.")
+    except ValueError:
+        bot.reply_to(message, "Veuillez entrer un nombre valide pour les signaux.")
+
 # === Fonction pour prédire et gérer les signaux ===
 def send_prediction(message):
     try:
-        if message.from_user.id != MON_ID:
+        if message.from_user.id not in users_activated or not users_activated[message.from_user.id]:
             bot.reply_to(message, "Vous n'avez pas accès aux signaux.")
             return
 
