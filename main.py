@@ -6,11 +6,9 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestRegressor
 import xgboost as xgb
-from sklearn.metrics import mean_absolute_error
-import joblib
 from sklearn.preprocessing import StandardScaler
+import joblib
 from dotenv import load_dotenv
 
 # Charger les variables d'environnement à partir du fichier .env
@@ -99,8 +97,8 @@ def handle_admin_actions(message):
     global signaux_activés
 
     if message.text == "Activer les signaux":
-        bot.reply_to(message, "Envoie l'ID utilisateur pour activer les signaux.")
-        bot.register_next_step_handler(message, ask_for_signal_count)
+        signaux_activés = True
+        bot.reply_to(message, "Les signaux sont maintenant activés.")
     
     elif message.text == "Désactiver les signaux":
         signaux_activés = False
@@ -113,26 +111,7 @@ def handle_admin_actions(message):
     elif message.text == "Retour":
         send_welcome(message)
 
-# === Fonction pour demander le nombre de signaux ===
-def ask_for_signal_count(message):
-    user_id = message.text
-    try:
-        user_id = int(user_id)  # Vérifier si l'ID est un nombre
-        bot.reply_to(message, f"Combien de signaux veux-tu attribuer à l'utilisateur {user_id} ?")
-        bot.register_next_step_handler(message, assign_signals, user_id)
-    except ValueError:
-        bot.reply_to(message, "ID invalide. Veuillez entrer un ID valide.")
-
-# === Fonction pour assigner les signaux ===
-def assign_signals(message, user_id):
-    try:
-        num_signals = int(message.text)  # Vérifier si c'est un nombre
-        signaux_restants[user_id] = num_signals
-        bot.reply_to(message, f"Les signaux ont été attribués à l'utilisateur {user_id} avec {num_signals} signaux.")
-    except ValueError:
-        bot.reply_to(message, "Veuillez entrer un nombre valide de signaux.")
-
-# === Fonction prédiction ===
+# === Fonction pour prédire et gérer les signaux ===
 def send_prediction(message):
     try:
         if message.from_user.id != MON_ID:
@@ -146,10 +125,23 @@ def send_prediction(message):
 
         data = response.json()
         coefs = [float(game.get("top_coefficient", 0)) for game in data[:20] if game.get("top_coefficient")]
-        
+
         if len(coefs) < 20:
             bot.reply_to(message, "Pas assez de données pour générer un signal.")
             return
+
+        # Vérification des coefficients inférieurs à 2X
+        low_coefficients_count = sum(1 for coef in coefs if coef < 2)
+
+        # Si plus de la moitié des coefficients sont inférieurs à 2, la prédiction est rejetée
+        if low_coefficients_count >= 10:
+            bot.reply_to(message, "Trop de coefficients inférieurs à 2X détectés. Prédiction rejetée.")
+            
+            # Augmenter le délai d'attente en fonction de l'anomalie
+            wait_time = 10 + low_coefficients_count  # Plus il y a de faibles coefficients, plus l'attente est longue
+            heure_prediction = (datetime.now() + timedelta(minutes=wait_time)).strftime("%H:%M")
+            bot.reply_to(message, f"Veuillez patienter davantage. Nouvelle prédiction dans : {heure_prediction}")
+            return  # Fin de la fonction pour ne pas envoyer de signal
 
         # Normaliser les données
         coefs_scaled = scaler.fit_transform(np.array(coefs).reshape(-1, 1)).flatten()
@@ -157,7 +149,7 @@ def send_prediction(message):
         # Charger le modèle existant ou en créer un nouveau si nécessaire
         global model
         if model is None:
-            model = joblib.load(model_file) if joblib.os.path.exists(model_file) else train_model(coefs_scaled)
+            model = joblib.load(model_file) if os.path.exists(model_file) else train_model(coefs_scaled)
 
         # Effectuer la prédiction pour les coefficients futurs
         prediction = model.predict([coefs_scaled[-5:]])[0]  # Utiliser les 5 derniers coefficients pour la prédiction
@@ -169,9 +161,13 @@ def send_prediction(message):
 
         # Durée d'attente entre 2 et 7 minutes
         wait_time = 2 + int((prediction - 2.1) * 1.5)
+
+        # Calculer l'heure de prédiction
         heure_prediction = (datetime.now() + timedelta(minutes=wait_time)).strftime("%H:%M")
 
-        # Message de signal
+        # Message de signal avec les 5 derniers tours visibles
+        last_five_tours = "\n".join([f"Tour {i+1}: {coef}X" for i, coef in enumerate(coefs[-5:])])
+
         signal = f"""
 ♣︎ SIGNAL LUCKY JET ♣︎
 
@@ -179,6 +175,9 @@ def send_prediction(message):
 
 ➣ 𝐂𝐎𝐄𝐅𝐅𝐈𝐂𝐈𝐄𝐍𝐓 : {prediction}X
 ➣ 𝐀𝐒𝐒𝐔𝐑𝐀𝐍𝐂𝐄 : {assurance}X
+
+➣ 𝐋𝐄𝐒 𝟓 𝐃𝐄𝐑𝐍𝐈𝐄𝐑𝐒 𝐓𝐎𝐔𝐑𝐒 :
+{last_five_tours}
 
 𝙿𝚕𝚊𝚝𝚎𝚏𝚘𝚛𝚎: 1WIN🔔
 𝙲𝚘𝚍𝚎 𝚙𝚛𝚘𝚖𝚘: DIVINEJET 🔑
