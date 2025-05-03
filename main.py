@@ -10,6 +10,8 @@ import xgboost as xgb
 from sklearn.preprocessing import StandardScaler
 import joblib
 from dotenv import load_dotenv
+import threading
+import time
 
 load_dotenv()
 
@@ -140,6 +142,34 @@ def send_prediction(message):
         if low_count >= 10:
             heure = (datetime.now() + timedelta(minutes=10 + low_count)).strftime("%H:%M")
             bot.reply_to(message, f"Trop de coefficients bas. Reviens à : {heure}")
+
+            # Fonction de surveillance
+            def monitor_user(user_id, chat_id):
+                while True:
+                    try:
+                        response = requests.get(url, params=params, headers=headers)
+                        data = response.json()
+                        coefs = [float(game.get("top_coefficient", 0)) for game in data[:20] if game.get("top_coefficient")]
+                        if len(coefs) < 20:
+                            time.sleep(60)
+                            continue
+
+                        low_count = sum(1 for c in coefs if c < 2)
+                        if low_count < 10:
+                            fake_message = type('obj', (object,), {'chat': type('chat', (object,), {'id': chat_id}), 'from_user': type('user', (object,), {'id': user_id})})()
+                            send_prediction(fake_message)
+                            break
+
+                        time.sleep(60)
+                    except Exception as e:
+                        print(f"Erreur monitoring : {e}")
+                        time.sleep(60)
+
+            user_id = message.from_user.id
+            chat_id = message.chat.id
+            thread = threading.Thread(target=monitor_user, args=(user_id, chat_id))
+            thread.start()
+
             return
 
         coefs_scaled = scaler.fit_transform(np.array(coefs).reshape(-1, 1)).flatten()
@@ -148,7 +178,9 @@ def send_prediction(message):
         if model is None:
             model = joblib.load(model_file) if os.path.exists(model_file) else train_model(coefs_scaled)
 
-        prediction = model.predict([coefs_scaled[-5:]])[0]
+        # Ajuster ici, transformer les 5 derniers coefficients en une matrice (1, 5)
+        prediction_input = np.array(coefs_scaled[-5:]).reshape(1, -1)  # Résolution de l'erreur en ajoutant reshape
+        prediction = model.predict(prediction_input)[0]
         prediction = max(2.1, min(prediction, 7.0))
 
         assurance = round(1.9 + (prediction - 2.1) * (3.5 - 1.9) / (max(coefs) - min(coefs)), 2)
@@ -179,10 +211,5 @@ def send_prediction(message):
     except Exception as e:
         bot.reply_to(message, f"Erreur : {e}")
 
-def train_model(coefs_scaled):
-    model = xgb.XGBRegressor(objective="reg:squarederror")
-    model.fit(coefs_scaled[:-1].reshape(-1, 1), coefs_scaled[1:])
-    return model
-
-# === Lancer le bot ===
-bot.polling(non_stop=True)
+# Démarrer le bot
+bot.polling()
