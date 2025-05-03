@@ -11,223 +11,178 @@ from sklearn.preprocessing import StandardScaler
 import joblib
 from dotenv import load_dotenv
 
-# Charger les variables d'environnement à partir du fichier .env
 load_dotenv()
 
-# === Ton token ici ===
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 bot = telebot.TeleBot(TOKEN)
 
-# === Ton ID Telegram pour accès Admin ===
-ADMIN_ID = 6491165519  # Ton vrai ID Telegram ici
+ADMIN_ID = 6491165519
 
-# === API ===
 url = "https://crash-gateway-cc-cr.gamedev-tech.cc/history"
 params = {
     "id_n": "1play_luckyjet",
     "id_i": "1"
 }
 headers = {
-    "Cookie": os.getenv("API_COOKIE")  # Ton cookie API depuis les variables d'environnement
+    "Cookie": os.getenv("API_COOKIE")
 }
 
-# === Variables de gestion des signaux ===
-signaux_activés = True  # Initialement les signaux sont activés
-last_signal_time = {}  # Dictionnaire pour stocker le dernier envoi de signal par utilisateur
-signaux_restants = {}  # Dictionnaire pour stocker le nombre de signaux restants par utilisateur
-users_activated = {}  # Dictionnaire pour suivre les utilisateurs activés
+users_signaux = {}
+last_signal_time = {}
 
-# === Ton ID pour vérification ===
-MON_ID = 6908816326  # Ton ID utilisateur spécifique pour les signaux
-
-# === Variables du modèle de Machine Learning ===
-model = None  # Modèle de machine learning
-scaler = StandardScaler()  # Scaler pour normaliser les données
+model = None
+scaler = StandardScaler()
 model_file = "lucky_jet_model.pkl"
 
-# === Menu de démarrage ===
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(KeyboardButton("🎯 Signal"), KeyboardButton("👤 Mon compte"))
-    markup.add(KeyboardButton("🛡️ Admin"))
+    if message.from_user.id == ADMIN_ID:
+        markup.add(KeyboardButton("🛡️ Admin"))
     bot.send_message(message.chat.id, "Bienvenue dans le bot ! Choisis une option :", reply_markup=markup)
 
-# === Gestion du menu ===
 @bot.message_handler(func=lambda message: message.text in ["🎯 Signal", "👤 Mon compte", "🛡️ Admin"])
 def handle_menu(message):
+    user_id = message.from_user.id
     if message.text == "🎯 Signal":
-        if signaux_activés:
-            # Vérifier si l'utilisateur est activé
-            user_id = message.from_user.id
-            if user_id in users_activated and users_activated[user_id]:
-                # Vérifier l'anti-spam (2 minutes)
-                if user_id in last_signal_time:
-                    time_since_last_signal = datetime.now() - last_signal_time[user_id]
-                    if time_since_last_signal < timedelta(minutes=2):
-                        bot.reply_to(message, "Veuillez patienter encore quelques minutes avant de demander un nouveau signal.")
-                        return
+        user_data = users_signaux.get(user_id, {"active": False, "count": 0})
+        if not user_data["active"] or user_data["count"] <= 0:
+            bot.reply_to(message, "Vous n'avez pas accès aux signaux.")
+            return
+        if user_id in last_signal_time and datetime.now() - last_signal_time[user_id] < timedelta(minutes=2):
+            bot.reply_to(message, "Veuillez patienter encore avant de demander un nouveau signal.")
+            return
+        send_prediction(message)
+        last_signal_time[user_id] = datetime.now()
 
-                send_prediction(message)
-                # Mettre à jour le dernier envoi de signal
-                last_signal_time[user_id] = datetime.now()
-            else:
-                bot.reply_to(message, "Vous n'avez pas accès aux signaux.")
-        else:
-            bot.reply_to(message, "Les signaux sont actuellement désactivés.")
     elif message.text == "👤 Mon compte":
-        # Afficher le nombre de signaux restants
-        user_id = message.from_user.id
-        remaining_signals = signaux_restants.get(user_id, 0)
-        bot.reply_to(message, f"Ton ID Telegram est : {user_id}\nSignaux restants : {remaining_signals}")
-    elif message.text == "🛡️ Admin":
-        # Vérification de l'ID Admin
-        if message.from_user.id == ADMIN_ID:
-            send_admin_options(message)
-        else:
-            bot.reply_to(message, f"Accès refusé : réservé à l’administrateur. Ton ID : {message.from_user.id}")
-    else:
-        bot.reply_to(message, "Commande inconnue.")
+        data = users_signaux.get(user_id, {"active": False, "count": 0})
+        status = "Activé" if data["active"] else "Désactivé"
+        bot.reply_to(message, f"ID : {user_id}\nSignaux restants : {data['count']}\nÉtat : {status}")
 
-# === Fonction de gestion des options Admin ===
-def send_admin_options(message):
+    elif message.text == "🛡️ Admin":
+        if message.from_user.id == ADMIN_ID:
+            show_admin_menu(message)
+        else:
+            bot.reply_to(message, f"Accès refusé. Ton ID : {user_id}")
+
+def show_admin_menu(message):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(KeyboardButton("Activer les signaux"), KeyboardButton("Désactiver les signaux"))
     markup.add(KeyboardButton("État des signaux"), KeyboardButton("Retour"))
-    bot.send_message(message.chat.id, "Bienvenue Admin ! Choisis une option :", reply_markup=markup)
+    bot.send_message(message.chat.id, "Bienvenue Admin, choisis une option :", reply_markup=markup)
 
-# === Fonction pour activer/désactiver les signaux ===
-@bot.message_handler(func=lambda message: message.text in ["Activer les signaux", "Désactiver les signaux", "État des signaux", "Retour"])
-def handle_admin_actions(message):
-    global signaux_activés
-
-    if message.text == "Activer les signaux":
-        # Demander l'ID utilisateur et le nombre de signaux
-        bot.send_message(message.chat.id, "Veuillez entrer l'ID de l'utilisateur.")
-        bot.register_next_step_handler(message, get_user_id_for_signals)
-    
-    elif message.text == "Désactiver les signaux":
-        signaux_activés = False
-        bot.reply_to(message, "Les signaux sont maintenant désactivés.")
-    
-    elif message.text == "État des signaux":
-        state = "activés" if signaux_activés else "désactivés"
-        bot.reply_to(message, f"Les signaux sont actuellement {state}.")
-    
-    elif message.text == "Retour":
+@bot.message_handler(func=lambda message: message.text in ["Retour", "Activer les signaux", "Désactiver les signaux", "État des signaux"])
+def handle_admin_commands(message):
+    if message.text == "Retour":
         send_welcome(message)
+    elif message.text == "Activer les signaux":
+        bot.reply_to(message, "Envoie l'ID de l'utilisateur à activer.")
+        bot.register_next_step_handler(message, get_id_for_activation)
+    elif message.text == "Désactiver les signaux":
+        bot.reply_to(message, "Envoie l'ID de l'utilisateur à désactiver.")
+        bot.register_next_step_handler(message, get_id_for_deactivation)
+    elif message.text == "État des signaux":
+        bot.reply_to(message, "Envoie l'ID de l'utilisateur à consulter.")
+        bot.register_next_step_handler(message, get_id_for_status)
 
-# === Fonction pour obtenir l'ID utilisateur et le nombre de signaux ===
-def get_user_id_for_signals(message):
-    user_id = int(message.text)  # Convertir l'ID utilisateur
-    bot.send_message(message.chat.id, f"ID utilisateur {user_id} trouvé. Combien de signaux souhaitez-vous lui attribuer ?")
-    bot.register_next_step_handler(message, get_signals_for_user, user_id)
-
-# === Fonction pour obtenir le nombre de signaux ===
-def get_signals_for_user(message, user_id):
+def get_id_for_activation(message):
     try:
-        num_signals = int(message.text)  # Convertir le nombre de signaux
-        # Activer l'utilisateur pour qu'il puisse demander des signaux
-        users_activated[user_id] = True
-        signaux_restants[user_id] = num_signals
-        bot.reply_to(message, f"Les signaux ont été activés pour l'utilisateur {user_id} avec {num_signals} signaux.")
-
-        # Notifier l'utilisateur que les signaux sont activés
-        bot.send_message(user_id, "Les signaux ont été activés pour vous. Vous pouvez maintenant demander des prédictions.")
+        user_id = int(message.text)
+        bot.reply_to(message, "Combien de signaux accorder ?")
+        bot.register_next_step_handler(message, lambda m: activate_user(m, user_id))
     except ValueError:
-        bot.reply_to(message, "Veuillez entrer un nombre valide pour les signaux.")
+        bot.reply_to(message, "ID invalide. Réessaye.")
 
-# === Fonction pour prédire et gérer les signaux ===
+def activate_user(message, user_id):
+    try:
+        count = int(message.text)
+        users_signaux[user_id] = {"active": True, "count": count}
+        bot.reply_to(message, f"Utilisateur {user_id} activé avec {count} signaux.")
+        bot.send_message(user_id, f"Tu as maintenant accès aux signaux ! ({count} restants)")
+    except Exception as e:
+        bot.reply_to(message, f"Erreur : {e}")
+
+def get_id_for_deactivation(message):
+    try:
+        user_id = int(message.text)
+        users_signaux[user_id] = {"active": False, "count": 0}
+        bot.reply_to(message, f"Signaux désactivés pour {user_id}.")
+        bot.send_message(user_id, "Ton accès aux signaux a été désactivé.")
+    except Exception as e:
+        bot.reply_to(message, f"Erreur : {e}")
+
+def get_id_for_status(message):
+    try:
+        user_id = int(message.text)
+        data = users_signaux.get(user_id, {"active": False, "count": 0})
+        status = "Activé" if data["active"] else "Désactivé"
+        bot.reply_to(message, f"ID : {user_id}\nSignaux restants : {data['count']}\nÉtat : {status}")
+    except Exception as e:
+        bot.reply_to(message, f"Erreur : {e}")
+
 def send_prediction(message):
     try:
-        if message.from_user.id not in users_activated or not users_activated[message.from_user.id]:
-            bot.reply_to(message, "Vous n'avez pas accès aux signaux.")
-            return
-
         response = requests.get(url, params=params, headers=headers)
         if response.status_code != 200:
-            bot.reply_to(message, "Erreur API : impossible de récupérer les données.")
+            bot.reply_to(message, "Erreur API.")
             return
 
         data = response.json()
         coefs = [float(game.get("top_coefficient", 0)) for game in data[:20] if game.get("top_coefficient")]
 
         if len(coefs) < 20:
-            bot.reply_to(message, "Pas assez de données pour générer un signal.")
+            bot.reply_to(message, "Pas assez de données.")
             return
 
-        # Vérification des coefficients inférieurs à 2X
-        low_coefficients_count = sum(1 for coef in coefs if coef < 2)
+        low_count = sum(1 for c in coefs if c < 2)
+        if low_count >= 10:
+            heure = (datetime.now() + timedelta(minutes=10 + low_count)).strftime("%H:%M")
+            bot.reply_to(message, f"Trop de coefficients bas. Reviens à : {heure}")
+            return
 
-        # Si plus de la moitié des coefficients sont inférieurs à 2, la prédiction est rejetée
-        if low_coefficients_count >= 10:
-            bot.reply_to(message, "Trop de coefficients inférieurs à 2X détectés. Prédiction rejetée.")
-            
-            # Augmenter le délai d'attente en fonction de l'anomalie
-            wait_time = 10 + low_coefficients_count  # Plus il y a de faibles coefficients, plus l'attente est longue
-            heure_prediction = (datetime.now() + timedelta(minutes=wait_time)).strftime("%H:%M")
-            bot.reply_to(message, f"Veuillez patienter davantage. Nouvelle prédiction dans : {heure_prediction}")
-            return  # Fin de la fonction pour ne pas envoyer de signal
-
-        # Normaliser les données
         coefs_scaled = scaler.fit_transform(np.array(coefs).reshape(-1, 1)).flatten()
 
-        # Charger le modèle existant ou en créer un nouveau si nécessaire
         global model
         if model is None:
             model = joblib.load(model_file) if os.path.exists(model_file) else train_model(coefs_scaled)
 
-        # Effectuer la prédiction pour les coefficients futurs
-        prediction = model.predict([coefs_scaled[-5:]])[0]  # Utiliser les 5 derniers coefficients pour la prédiction
-        prediction = max(2.1, min(prediction, 7.0))  # Limiter la plage de la prédiction
+        prediction = model.predict([coefs_scaled[-5:]])[0]
+        prediction = max(2.1, min(prediction, 7.0))
 
-        # Calculer l'assurance
-        assurance = 1.9 + (prediction - 2.1) * (3.5 - 1.9) / (max(coefs) - min(coefs))
-        assurance = round(min(assurance, prediction - 0.1), 2)
+        assurance = round(1.9 + (prediction - 2.1) * (3.5 - 1.9) / (max(coefs) - min(coefs)), 2)
+        assurance = min(assurance, prediction - 0.1)
 
-        # Durée d'attente entre 2 et 7 minutes
-        wait_time = 2 + int((prediction - 2.1) * 1.5)
-
-        # Calculer l'heure de prédiction
-        heure_prediction = (datetime.now() + timedelta(minutes=wait_time)).strftime("%H:%M")
-
-        # Message de signal avec les 5 derniers tours visibles
-        last_five_tours = "\n".join([f"Tour {i+1}: {coef}X" for i, coef in enumerate(coefs[-5:])])
+        heure_prediction = (datetime.now() + timedelta(minutes=2 + int((prediction - 2.1) * 1.5))).strftime("%H:%M")
+        last_five = "\n".join([f"Tour {i+1} : {coef}X" for i, coef in enumerate(coefs[-5:])])
 
         signal = f"""
 ♣︎ SIGNAL LUCKY JET ♣︎
 
 ➣ 𝐇𝐄𝐔𝐑𝐄 : {heure_prediction}🇨🇮
-
-➣ 𝐂𝐎𝐄𝐅𝐅𝐈𝐂𝐈𝐄𝐍𝐓 : {prediction}X
+➣ 𝐂𝐎𝐄𝐅𝐅𝐈𝐂𝐈𝐄𝐍𝐓 : {round(prediction, 2)}X
 ➣ 𝐀𝐒𝐒𝐔𝐑𝐀𝐍𝐂𝐄 : {assurance}X
 
 ➣ 𝐋𝐄𝐒 𝟓 𝐃𝐄𝐑𝐍𝐈𝐄𝐑𝐒 𝐓𝐎𝐔𝐑𝐒 :
-{last_five_tours}
+{last_five}
 
-𝙿𝚕𝚊𝚝𝚎𝚏𝚘𝚛𝚎: 1WIN🔔
+𝙿𝚕𝚊𝚝𝚎𝚏𝚘𝚛𝚖𝚎: 1WIN🔔
 𝙲𝚘𝚍𝚎 𝚙𝚛𝚘𝚖𝚘: DIVINEJET 🔑
 """
         bot.reply_to(message, signal)
-
-        # Sauvegarder le modèle mis à jour
-        joblib.dump(model, model_file)
-
-        # Décrémenter les signaux restants
         user_id = message.from_user.id
-        signaux_restants[user_id] = signaux_restants.get(user_id, 10) - 1
-        if signaux_restants[user_id] < 0:
-            signaux_restants[user_id] = 0
+        users_signaux[user_id]["count"] = max(users_signaux[user_id]["count"] - 1, 0)
+
+        joblib.dump(model, model_file)
 
     except Exception as e:
         bot.reply_to(message, f"Erreur : {e}")
 
-# === Fonction pour entraîner le modèle ===
 def train_model(coefs_scaled):
-    # Créer un modèle de Machine Learning pour la prédiction
     model = xgb.XGBRegressor(objective="reg:squarederror")
     model.fit(coefs_scaled[:-1].reshape(-1, 1), coefs_scaled[1:])
     return model
 
-# === Démarrage du bot ===
+# === Lancer le bot ===
 bot.polling(non_stop=True)
