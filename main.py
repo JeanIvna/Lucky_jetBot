@@ -21,7 +21,7 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 bot = telebot.TeleBot(TOKEN)
 
 # === Ton ID Telegram pour accès Admin ===
-ADMIN_ID = 6053221262  # Remplace avec ton vrai ID Telegram
+ADMIN_ID = 6491165519  # Ton vrai ID Telegram ici
 
 # === API ===
 url = "https://crash-gateway-cc-cr.gamedev-tech.cc/history"
@@ -90,11 +90,11 @@ def handle_menu(message):
 def send_admin_options(message):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(KeyboardButton("Activer les signaux"), KeyboardButton("Désactiver les signaux"))
-    markup.add(KeyboardButton("État des signaux"))
+    markup.add(KeyboardButton("État des signaux"), KeyboardButton("Retour"))
     bot.send_message(message.chat.id, "Bienvenue Admin ! Choisis une option :", reply_markup=markup)
 
 # === Fonction pour activer/désactiver les signaux ===
-@bot.message_handler(func=lambda message: message.text in ["Activer les signaux", "Désactiver les signaux", "État des signaux"])
+@bot.message_handler(func=lambda message: message.text in ["Activer les signaux", "Désactiver les signaux", "État des signaux", "Retour"])
 def handle_admin_actions(message):
     global signaux_activés
 
@@ -109,6 +109,9 @@ def handle_admin_actions(message):
     elif message.text == "État des signaux":
         state = "activés" if signaux_activés else "désactivés"
         bot.reply_to(message, f"Les signaux sont actuellement {state}.")
+    
+    elif message.text == "Retour":
+        send_welcome(message)
 
 # === Fonction pour demander le nombre de signaux ===
 def ask_for_signal_count(message):
