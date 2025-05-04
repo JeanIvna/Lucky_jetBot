@@ -36,6 +36,19 @@ model = None
 scaler = StandardScaler()
 model_file = "lucky_jet_model.pkl"
 
+def train_model(data):
+    X, y = [], []
+    for i in range(len(data) - 5):
+        X.append(data[i:i+5])
+        y.append(data[i+5])
+    X = np.array(X)
+    y = np.array(y)
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    regressor = xgb.XGBRegressor(n_estimators=100, max_depth=3, learning_rate=0.1)
+    regressor.fit(X_train, y_train)
+    return regressor
+
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     markup = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -143,7 +156,6 @@ def send_prediction(message):
             heure = (datetime.now() + timedelta(minutes=10 + low_count)).strftime("%H:%M")
             bot.reply_to(message, f"Trop de coefficients bas. Reviens à : {heure}")
 
-            # Fonction de surveillance
             def monitor_user(user_id, chat_id):
                 while True:
                     try:
@@ -153,13 +165,11 @@ def send_prediction(message):
                         if len(coefs) < 20:
                             time.sleep(60)
                             continue
-
                         low_count = sum(1 for c in coefs if c < 2)
                         if low_count < 10:
                             fake_message = type('obj', (object,), {'chat': type('chat', (object,), {'id': chat_id}), 'from_user': type('user', (object,), {'id': user_id})})()
                             send_prediction(fake_message)
                             break
-
                         time.sleep(60)
                     except Exception as e:
                         print(f"Erreur monitoring : {e}")
@@ -169,7 +179,6 @@ def send_prediction(message):
             chat_id = message.chat.id
             thread = threading.Thread(target=monitor_user, args=(user_id, chat_id))
             thread.start()
-
             return
 
         coefs_scaled = scaler.fit_transform(np.array(coefs).reshape(-1, 1)).flatten()
@@ -178,8 +187,7 @@ def send_prediction(message):
         if model is None:
             model = joblib.load(model_file) if os.path.exists(model_file) else train_model(coefs_scaled)
 
-        # Ajuster ici, transformer les 5 derniers coefficients en une matrice (1, 5)
-        prediction_input = np.array(coefs_scaled[-5:]).reshape(1, -1)  # Résolution de l'erreur en ajoutant reshape
+        prediction_input = np.array(coefs_scaled[-5:]).reshape(1, -1)
         prediction = model.predict(prediction_input)[0]
         prediction = max(2.1, min(prediction, 7.0))
 
@@ -211,5 +219,5 @@ def send_prediction(message):
     except Exception as e:
         bot.reply_to(message, f"Erreur : {e}")
 
-# Démarrer le bot
+# Lancer le bot
 bot.polling()
