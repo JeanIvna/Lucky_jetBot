@@ -1,8 +1,8 @@
 pyTelegramBotAPI
 requests
-pandas
-numpy
+python-dotenv
 scikit-learn
 xgboost
-joblib
-python-dotenv
+pandas
+numpy
+jobli
